@@ -1,0 +1,118 @@
+# ---------------------------------------------------------------------------
+# DeepSeek Harness 本地/内网自托管
+#
+#   docker compose up -d --build
+#   浏览器打开 http://<宿主机IP>:3088  （首次会自动用下面的默认密码建号）
+#
+# 对外只需要 3088 一个端口；nginx 反代请指向它并支持 WebSocket 升级，
+# 同时保留 Host / X-Forwarded-* 头。
+# ---------------------------------------------------------------------------
+
+services:
+  dsh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 组件默认跟随 npm 最新：重建镜像即自动升级（构建日志里会打印解析结果，
+        # 镜像内 /opt/dsh-versions.json 可随时查看实际装了什么）。
+        # 想钉死某个版本就直接填版本号，例如 SKIN_CENTER_VERSION=0.4.4。
+        DSH_VERSION: ${DSH_VERSION:-latest}
+        DSH_PASSWORDS_VERSION: ${DSH_PASSWORDS_VERSION:-latest}
+        SKIN_CENTER_VERSION: ${SKIN_CENTER_VERSION:-latest}
+        # ds-bot：装进 profile 但默认不启用（在「设置 → 插件」里启用）
+        DS_BOT_VERSION: ${DS_BOT_VERSION:-latest}
+        # 版本解析这一步会被 Docker 层缓存。重建时想强制重新解析（拿到真正的最新），
+        # 换一个 REFRESH 值即可：
+        #   PowerShell:  $env:DSH_REFRESH=(Get-Date -UFormat %s); docker compose build
+        #   bash:        DSH_REFRESH=$(date +%s) docker compose build
+        REFRESH: ${DSH_REFRESH:-0}
+        # pnpm 是构建/安装工具，不属于上面这些组件；默认也跟随最新
+        PNPM_VERSION: ${PNPM_VERSION:-latest}
+    image: ${DSH_IMAGE:-dsh-local:latest}
+    container_name: ${DSH_CONTAINER_NAME:-dsh}
+    restart: unless-stopped
+    # tini 作为 PID 1：回收容器启动脚本留下的后台进程（自动建号脚本等）
+    init: true
+    # 容器内固定时区，日志与用量统计才可读（可选）
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+
+      # ── 模型密钥（可选；可以留空）────────────────────────────────────────
+      # https://platform.deepseek.com/
+      # 填了：首次启动会把它写进凭据文件（/data/dsh/.credentials.yaml 的 refs），
+      #       然后容器就不再保留这个环境变量——因为 DSH 的凭据优先级是
+      #      「启动环境 > 凭据文件」，留着变量会让「设置 → 模型」里改的 key 永远不生效。
+      # 留空：首次启动不播种，登录后在「设置 → 模型」里填即可（推荐做法）。
+      # 已有凭据之后，这里再改也不会覆盖它（播种只在库里没有该键时发生）。
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+
+      # ── 默认登录账号（这就是“默认密码”的配置点）──────────────────────────
+      # 首次启动由容器自动调用网关的首次配置接口创建主用户；已初始化后
+      # 改这两个变量不会重置账号（改密码请登录后在设置页操作）。
+      # 密码策略：>=12 位，且含大写、小写、数字、符号，<=72 字节。
+      # 留空 = 不自动建号，改为首次访问网页时用 SETUP_KEY 手工创建。
+      DSH_ADMIN_USERNAME: ${DSH_ADMIN_USERNAME:-admin}
+      DSH_ADMIN_PASSWORD: ${DSH_ADMIN_PASSWORD:-ChangeMe@2026!}
+
+      # ── 首次配置密钥（可选）────────────────────────────────────────────
+      # 与上面的自动建号互为兜底：留空则由容器生成随机值并写入
+      # /data/dsh-passwords/setup-key.txt（自动建号成功后会被轮换并删除该文件）。
+      # 注意：密钥里不要出现 ' " ; -- /* */ ` 等字符（插件会拒绝）。
+      SETUP_KEY: ${SETUP_KEY:-}
+
+      # ── 网关监听（容器内）──────────────────────────────────────────────
+      # 保持 0.0.0.0:3088；对外端口用下面的 ports 映射，不要在容器内改端口。
+      MCP_GATEWAY_HOST: 0.0.0.0
+      MCP_GATEWAY_PORT: 3088
+      MCP_GATEWAY_AUTO_TLS: "0"
+
+      # 反代/Host 相关（可选）：公网域名固定后填上，防 Host 伪造、修正跳转地址
+      MCP_GATEWAY_PUBLIC_HOST: ${MCP_GATEWAY_PUBLIC_HOST:-}
+
+      # 管理员「目录选择器」的安全起点（可选）：子用户可读取目录的浏览起点。
+      # 留空 = 容器内 node 用户家目录。多个起点用逗号分隔。
+      MCP_GATEWAY_DIRECTORY_PICKER_ROOTS: ${MCP_GATEWAY_DIRECTORY_PICKER_ROOTS:-/workspace}
+
+      # ── 外观与权限的默认值 ─────────────────────────────────────────────
+      # 主题默认走 DSH 官方默认的浅色（由镜像里的 dsh-local-defaults bundle 提供），
+      # 皮肤默认不激活：whale-fantasy 已预装，用户在「设置 → 皮肤中心」自行启用。
+      # 想开箱就激活某个皮肤，填它的 id（如 whale-fantasy）；留空 = 官方原版外观。
+      DSH_SKIN_ID: ${DSH_SKIN_ID:-}
+
+      # 默认权限：完全权限（DSH 自己的开关：沙箱 danger-full-access + 审批 never）
+      DSH_PERMISSION_MODE: ${DSH_PERMISSION_MODE:-danger-full-access}
+
+      # ── 软件自更新（默认关闭，fail-closed）─────────────────────────────
+      MCP_DSH_AUTO_UPDATE: ${MCP_DSH_AUTO_UPDATE:-0}
+
+      # ── 文件式密钥（推荐，替代上面的明文变量）────────────────────────────
+      # 同样的三个密钥也可以从文件读取：*_FILE 优先于同名变量，内容不进
+      # `docker inspect`（环境变量会进）。用法：
+      #   1) 把密钥写进文件并收紧权限（Windows: icacls … /inheritance:r）
+      #   2) .env 里写 DEEPSEEK_API_KEY_FILE=./secrets/deepseek_api_key
+      #   3) 在 volumes 里挂载：  - ./secrets:/run/secrets:ro
+      DEEPSEEK_API_KEY_FILE: ${DEEPSEEK_API_KEY_FILE:-}
+      DSH_ADMIN_PASSWORD_FILE: ${DSH_ADMIN_PASSWORD_FILE:-}
+      SETUP_KEY_FILE: ${SETUP_KEY_FILE:-}
+
+    ports:
+      # 直接对外发布 3088：宿主机所有网卡。只想本机访问就改成 "127.0.0.1:3088:3088"。
+      - "${DSH_PORT:-3088}:3088"
+
+    volumes:
+      # DSH_HOME：profile、插件、会话、皮肤
+      - dsh-home:/data/dsh
+      # dsh-passwords：.env、SQLite 数据库、审计日志
+      - dsh-passwords-state:/data/dsh-passwords
+      # agent 的工作区。用命名卷是为了让属主保持为容器内的 node 用户；
+      # 想直接映射宿主机目录时改成 bind mount，并先确认该目录对 uid 1000 可写：
+      #   - /srv/dsh-workspace:/workspace
+      - dsh-workspace:/workspace
+      # 文件式密钥（配合上面的 *_FILE 使用）：把宿主机 ./secrets 只读挂进来
+      #   - ./secrets:/run/secrets:ro
+
+volumes:
+  dsh-home:
+  dsh-passwords-state:
+  dsh-workspace:

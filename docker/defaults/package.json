@@ -1,0 +1,11 @@
+{
+  "name": "dsh-local-defaults",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deployment defaults for this image: a patch layer BELOW the user's profile patch, so anything changed in the GUI wins over these values.",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

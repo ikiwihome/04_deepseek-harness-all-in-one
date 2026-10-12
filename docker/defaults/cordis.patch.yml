@@ -1,0 +1,37 @@
+# 本镜像的部署默认值。
+#
+# 这是一个 bundle 层，位于 profile 自己的 cordis.patch.yml **之下**，所以用户在
+# GUI 里改过的任何设置（DSH 会把它们写进 profile 的 cordis.patch.yml）都会覆盖
+# 这里的默认值——这里的值只负责“开箱默认”，不是强制。
+#
+# 默认主题：DSH 官方默认的浅色主题（preference: light）。
+# 皮肤（skin-center）不在这里配：激活状态在 $DSH_HOME/skin-center-active.json，
+# 默认是空（官方原版外观），用户在「设置 → 皮肤中心」里自行启用。
+- id: ui-theme
+  name: '@deepseek-ai/dsh-client-ui-theme'
+  config:
+    preference: light
+
+# 会话模式只保留「标准模式」。
+#
+# DSH 的「模式」是 agent preset（一套工具与提示的组合）。web 组合里出厂有四个：
+#   standard(标准) / ptc / minimal(极简) / cordis(创造者)
+# 这里把其余三个关掉，于是名册里只剩 standard；注册表默认值本来就指向它，
+# 所以新建会话（不带任何预设）解析出来的就是标准模式。关掉的预设不是“藏起来”，
+# 而是根本不存在——按 id 请求 ptc/minimal/cordis 会得到 agent-preset/not-found。
+- id: preset-ptc
+  disabled: true
+- id: preset-minimal
+  disabled: true
+- id: preset-cordis
+  disabled: true
+- id: agent-preset-registry
+  config:
+    default: standard
+
+# 同时去掉会话界面的模式选择器（新建任务那个「模式」按钮/菜单）。
+# 该界面插件同时提供：新建任务的 seat 选择器、会话头部的只读模式名、以及
+# 设置里的「代理预设」页。只剩一个模式时这套 UI 没有意义，整块关掉；
+# 会话创建本来就不要求客户端提交预设，宿主会回落到上面的 default: standard。
+- id: ui-agent-preset
+  disabled: true

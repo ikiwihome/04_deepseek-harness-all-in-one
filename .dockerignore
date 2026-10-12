@@ -1,0 +1,12 @@
+# 构建上下文只需要 Dockerfile / docker / skins
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+node_modules
+_scratch
+tests
+**/*.tgz
+README.md
+docker-compose.yml

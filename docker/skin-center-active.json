@@ -1,0 +1,13 @@
+{
+  "active": null,
+  "initialized": true,
+  "background": {
+    "enabled": true,
+    "backgroundOpacity": 35,
+    "backgroundBlurEmpty": 0,
+    "backgroundBlurContent": 0,
+    "inputCardBlur": 4,
+    "bubbleOpacity": 20,
+    "bubbleBlur": 4
+  }
+}
