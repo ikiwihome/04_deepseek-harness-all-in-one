@@ -160,8 +160,8 @@ DSH 的目录选择器在**不带路径打开时列的是 `os.homedir()`**，而
 * 只影响 `dsh web` 及其子进程（网关、agent shell、`docker exec` 之外的运行期组件）；
   上面的插件安装与播种步骤仍用镜像原本的 `HOME`，pnpm store 之类不会挪进工作区。
 
-工作区的挂载点本来就是 `/workspace`（compose 的 `dsh-workspace` 卷），`WORKDIR` 也是
-它，所以新会话的工作目录同样是 `/workspace`。
+工作区的挂载点本来就是 `/workspace`（compose 里 `${DSH_DATA_DIR}/workspace` 的 bind mount），
+`WORKDIR` 也是它，所以新会话的工作目录同样是 `/workspace`。
 
 ### 3.6 新建会话不再要求先选目录：默认工作区已存在
 
@@ -410,15 +410,31 @@ exec dsh web           启动 DSH Web，网关由插件接管
 > `duplicate loader entry id` 导致 DSH 起不来。所以两个插件都用“精确改 manifest”
 > 的方式注册（`register-web-plugins.mjs` 与官方 `register-plugin.mjs` 同思路）。
 
-数据卷：
+数据目录（宿主机 bind mount，不再是 Docker 命名卷）：
 
-| 卷 | 容器路径 | 内容 |
+| 宿主机路径 | 容器路径 | 内容 |
 |---|---|---|
-| `dsh-home` | `/data/dsh` | DSH_HOME：profile、插件、会话、皮肤 |
-| `dsh-passwords-state` | `/data/dsh-passwords` | `.env`、SQLite 库、审计与登录限流 |
-| `dsh-workspace` | `/workspace` | agent 的工作区（`WORKDIR`） |
+| `${DSH_DATA_DIR}/dsh-home` | `/data/dsh` | DSH_HOME：profile、插件、会话、皮肤 |
+| `${DSH_DATA_DIR}/dsh-passwords` | `/data/dsh-passwords` | `.env`、SQLite 库、审计与登录限流 |
+| `${DSH_DATA_DIR}/workspace` | `/workspace` | agent 的工作区（`WORKDIR`） |
 
-备份这两个卷即可；`docker compose down -v` 会**删除全部数据**，慎用。
+`DSH_DATA_DIR` 默认 `/data/deepseek-harness-all-in-one`（在 `.env` 里改）。
+
+**这个 `/data` 在哪、要注意什么（Docker Desktop on Windows）**
+
+- 绝对路径 `/data/...` 是 **Docker Desktop 虚拟机内部**的路径，实际落在
+  `%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx` 里；Windows 的 `C:\data` / `D:\data`
+  并不存在，资源管理器里也看不到。
+- ✅ 好处：容器重启、`docker compose down`、甚至 `docker compose down -v` 与
+  `docker volume prune` 都**不会再删掉它**（已经没有任何命名卷了）。
+- ❌ 坏处：Docker Desktop 的 **Reset / Purge data**、重装 Docker Desktop 会连同它一起清掉；
+  也没法用 Windows 工具直接备份。
+- 想放到 Windows 可见、可备份的位置：在 `.env` 里设
+  `DSH_DATA_DIR=D:/data/deepseek-harness-all-in-one`（或 `/d/data/...`），然后
+  `docker compose up -d` 重建容器即可（数据会被搬到该目录）。
+
+备份就是复制 `$DSH_DATA_DIR` 这三个子目录；恢复就是放回去再 `up -d`。
+在 Linux 宿主机上默认值本身就是 `/data/deepseek-harness-all-in-one`，无需改动。
 
 ---
 

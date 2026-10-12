@@ -27,10 +27,17 @@ set -eu
 # 运行期状态（密钥文件、SQLite 库、审计日志）一律只对属主可读。
 umask 077
 
-# Docker 会把命名卷挂载点建成 root 所有，即使镜像里的目录属于 node。
-# 先修正持久化目录的属主，随后所有应用代码都以非特权用户 node 运行。
-mkdir -p /data/dsh /data/dsh-passwords
-chown -R node:node /data/dsh /data/dsh-passwords
+# 数据目录现在是宿主机 bind mount（默认 $DSH_DATA_DIR，见 docker-compose.yml）。
+# Docker 新建的 bind 目录属于 root，命名卷挂载点也一样；这里统一把属主修正为 node，
+# 之后所有应用代码都以非特权用户 node 运行。
+# chown 失败不再中断启动：从 Windows 盘符 bind 进来时文件系统不保证支持 POSIX 属主，
+# 那属于宿主机侧权限问题，给一条可操作的告警比直接拒绝启动更有用。
+mkdir -p /data/dsh /data/dsh-passwords /workspace
+chown -R node:node /data/dsh /data/dsh-passwords 2>/dev/null \
+  || echo "[dsh] warning: could not chown the data dirs; check the host directory ownership" >&2
+# /workspace 可能是你自己的目录：只改目录本身，不递归翻里面的数据。
+chown node:node /workspace 2>/dev/null \
+  || echo "[dsh] warning: could not chown /workspace; the agent may be unable to write there (uid 1000)" >&2
 # 早于本次收紧而生成的状态（例如 0644 的 platform.db）一并收口。
 chmod -R go-rwx /data/dsh-passwords 2>/dev/null || true
 [ -f /data/dsh/.credentials.yaml ] && chmod go-rwx /data/dsh/.credentials.yaml 2>/dev/null || true

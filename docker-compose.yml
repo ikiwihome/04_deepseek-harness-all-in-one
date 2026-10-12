@@ -6,7 +6,14 @@
 #
 # 对外只需要 3088 一个端口；nginx 反代请指向它并支持 WebSocket 升级，
 # 同时保留 Host / X-Forwarded-* 头。
+#
+# 数据落在宿主机 ${DSH_DATA_DIR}（默认 /data/deepseek-harness-all-in-one）下的三个目录，
+# 见文件末尾的 volumes 段。
 # ---------------------------------------------------------------------------
+
+# 项目名固定，不跟随目录名：目录一改名，compose 就会把它当成另一个项目，
+# 于是另起一套容器/卷（旧数据看起来就"丢"了）。固定后重命名目录无感。
+name: ${DSH_PROJECT_NAME:-deepseek-harness}
 
 services:
   dsh:
@@ -101,18 +108,29 @@ services:
       - "${DSH_PORT:-3088}:3088"
 
     volumes:
-      # DSH_HOME：profile、插件、会话、皮肤
-      - dsh-home:/data/dsh
-      # dsh-passwords：.env、SQLite 数据库、审计日志
-      - dsh-passwords-state:/data/dsh-passwords
-      # agent 的工作区。用命名卷是为了让属主保持为容器内的 node 用户；
-      # 想直接映射宿主机目录时改成 bind mount，并先确认该目录对 uid 1000 可写：
-      #   - /srv/dsh-workspace:/workspace
-      - dsh-workspace:/workspace
+      # 三个持久化目录都放在宿主机的 ${DSH_DATA_DIR} 下
+      # （默认 /data/deepseek-harness-all-in-one）：
+      #   dsh-home      → /data/dsh           profile、插件、会话、皮肤
+      #   dsh-passwords → /data/dsh-passwords .env、SQLite 库、审计日志
+      #   workspace     → /workspace          agent 工作区
+      #
+      # ⚠️ Docker Desktop（Windows）里的绝对路径 /data/... 是 **Docker Desktop 虚拟机内部**
+      #    的路径，不是 Windows 盘符路径：既不在资源管理器里可见，也会随
+      #    "Docker Desktop → Reset / Purge data" 一起消失。想放到 Windows 可见、
+      #    可备份、不受 Docker 重置影响的位置，把 DSH_DATA_DIR 指到盘符路径即可（三种都行）：
+      #      DSH_DATA_DIR=D:/data/deepseek-harness-all-in-one
+      #      DSH_DATA_DIR=/d/data/deepseek-harness-all-in-one
+      #    在 Linux 宿主机上默认值就是它本身（/data/deepseek-harness-all-in-one）。
+      - ${DSH_DATA_DIR:-/data/deepseek-harness-all-in-one}/dsh-home:/data/dsh
+      - ${DSH_DATA_DIR:-/data/deepseek-harness-all-in-one}/dsh-passwords:/data/dsh-passwords
+      - ${DSH_DATA_DIR:-/data/deepseek-harness-all-in-one}/workspace:/workspace
       # 文件式密钥（配合上面的 *_FILE 使用）：把宿主机 ./secrets 只读挂进来
       #   - ./secrets:/run/secrets:ro
 
-volumes:
-  dsh-home:
-  dsh-passwords-state:
-  dsh-workspace:
+    networks:
+      bind:
+        ipv4_address: 172.19.0.20
+
+networks:
+  bind:
+    external: true
