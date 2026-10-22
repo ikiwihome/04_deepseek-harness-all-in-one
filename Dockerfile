@@ -185,14 +185,35 @@ RUN apt-get update \
   && echo "office preview fonts installed: $(find /usr/share/fonts -type f | wc -l) font files"
 
 # ---------------------------------------------------------------------------
-# 6) 运行期环境
+# 6) 登录持久化、视频预览与文件下载补丁（依赖层安装完后再打）
+#    profile 自己安装的网关副本由 entrypoint 在启动时同步打补丁。
+# ---------------------------------------------------------------------------
+COPY docker/patch-persistent-login.mjs docker/patch-video-preview.mjs docker/patch-download-preview.mjs /opt/dsh-setup/
+RUN node /opt/dsh-setup/patch-persistent-login.mjs \
+  && node /opt/dsh-setup/patch-video-preview.mjs \
+  && node /opt/dsh-setup/patch-download-preview.mjs
+
+# ---------------------------------------------------------------------------
+# 7) Agent 工具：FFmpeg、Python、Node/Python Playwright 与配套 Chromium。
+#    浏览器缓存固定在镜像中，避免 HOME=/workspace 后找不到 root 下载的浏览器。
+# ---------------------------------------------------------------------------
+ARG PLAYWRIGHT_VERSION=latest
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers \
+    NODE_PATH=/opt/dsh-tools/node_modules \
+    CHROMIUM_PATH=/usr/local/bin/chromium
+COPY docker/install-runtime-tools.sh docker/check-runtime-tools.mjs /opt/dsh-setup/
+RUN sed -i 's/\r$//' /opt/dsh-setup/install-runtime-tools.sh \
+  && sh /opt/dsh-setup/install-runtime-tools.sh
+
+# ---------------------------------------------------------------------------
+# 8) 运行期环境
 #    三个组件的实际版本不在这里写死：构建期的解析结果在 /opt/dsh-versions.json，
 #    运行期由 register-web-plugins.mjs 读取。
 #    DSH_PERMISSION_MODE=danger-full-access 是 DSH 自己的沙箱/审批开关：
 #      沙箱模式 → danger-full-access，审批 → never（默认完全权限）。
 #    DSH_SKIN_ID 故意不设：默认保持官方原版外观，皮肤由用户在界面里启用。
 # ---------------------------------------------------------------------------
-ENV PATH=/opt/dsh/node_modules/.bin:/opt/dsh-passwords/node_modules/.bin:${PATH} \
+ENV PATH=/opt/dsh-tools/node_modules/.bin:/opt/dsh-tools/venv/bin:/opt/dsh/node_modules/.bin:/opt/dsh-passwords/node_modules/.bin:${PATH} \
     DSH_HOME=/data/dsh \
     DSH_PASSWORDS_PKG=/opt/dsh-passwords/node_modules/dsh-passwords \
     DSH_PASSWORDS_ENV_FILE=/data/dsh-passwords/.env \
@@ -208,6 +229,9 @@ ENV PATH=/opt/dsh/node_modules/.bin:/opt/dsh-passwords/node_modules/.bin:${PATH}
     DSH_VERSIONS_JSON=/opt/dsh-versions.json \
     DSH_DEFAULTS_PKG=/opt/dsh-defaults \
     DSH_PERMISSION_MODE=danger-full-access
+
+# Test as the same non-root user and HOME used by agent shell commands.
+RUN su node -s /bin/sh -c 'HOME=/workspace node /opt/dsh-setup/check-runtime-tools.mjs'
 
 # ---------------------------------------------------------------------------
 # 默认登录密码（可选）：

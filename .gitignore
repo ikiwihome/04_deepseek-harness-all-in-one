@@ -9,3 +9,4 @@ _build.log
 _*.mjs
 _*.sh
 _scratch/
+.playwright-cli/

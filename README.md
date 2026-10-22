@@ -39,9 +39,58 @@ docker compose up -d --build
 打开 `http://<宿主机地址>:3088` → 用 `.env` 里的 `DSH_ADMIN_USERNAME` /
 `DSH_ADMIN_PASSWORD` 登录。
 
+登录成功后，同一个浏览器会持续保留该用户的登录状态，再次访问直接进入主界面，
+容器重启也不需要重新登录。首次升级后请重新登录一次，让旧的 12 小时凭证换成持久凭证。
+主动退出、改密、改名、删除账号后需重新登录；清除 Cookie、换浏览器或使用无痕窗口也需登录。
+浏览器的 Cookie 最长保存 400 天，每次访问页面会续期；连续超过 400 天未访问仍需重新登录。
+
+右侧「工作区文件」支持 Word（doc/docx）、PPT（ppt/pptx）、Excel（xls/xlsx）、
+Markdown（md/markdown）、图片（PNG/JPEG/GIF/WebP/BMP/ICO/SVG）和视频预览。
+Word/PPT 使用容器内的 Office 转 PDF 引擎与中英文字体，Excel 使用交互表格，
+Markdown 中的本地图片也能显示。视频新增 MP4/WebM/M4V/MOV/OGV 播放器，支持播放、
+暂停与拖动进度；实际编码需浏览器支持，推荐 H.264 MP4 或 WebM。视频分段读取沿用
+现有文件鉴权和目录权限，不再受图片的 20 MiB 大小上限限制。
+
+文件预览窗口顶部提供「下载原文件」，可直接下载 Word、PPT、Excel、Markdown、
+图片和视频等原始文件，保留中文文件名。下载采用分块传输，不受预览大小上限限制；
+即使某种格式无法渲染，也可以从预览窗口下载原文件。下载仍遵守登录与目录权限。
+
+登录与视频补丁在镜像构建时应用，持久化 profile 内的网关副本在启动时同步应用；
+上游代码的补丁位置不兼容时会明确报错。升级部署使用 `docker compose up -d --build`。
+回归检查可在运行中的容器内执行（不包含在生产镜像中）：
+
+```bash
+docker exec dsh mkdir -p /tmp/dsh-validation/docker /tmp/dsh-validation/tests
+docker cp docker/patch-persistent-login.mjs dsh:/tmp/dsh-validation/docker/
+docker cp docker/patch-video-preview.mjs dsh:/tmp/dsh-validation/docker/
+docker cp docker/patch-download-preview.mjs dsh:/tmp/dsh-validation/docker/
+docker cp tests/runtime-patches.test.mjs dsh:/tmp/dsh-validation/tests/
+docker exec dsh node --test /tmp/dsh-validation/tests/runtime-patches.test.mjs
+```
+
 开箱默认（详见第 3 节）：**官方原版外观 + 浅色主题**、
 **模型 Key 可在「设置 → 模型」里替换**（`.env` 里的值只作首次种子）、
 **默认完全权限**、**ds-bot 已安装但未启用**。
+
+镜像预装 **FFmpeg（含 ffprobe）、Python 3（含 pip）、Node.js/Python 双版 Playwright
+及配套 Chromium**。浏览器与系统依赖在构建时安装，运行时无需再下载。
+Node/Python Playwright 使用相同版本，共享 `/opt/playwright-browsers`；
+`python`、`python3`、`pip`、`ffmpeg`、`ffprobe`、`playwright`、`chromium` 可直接调用。
+Python 默认使用 `/opt/dsh-tools/venv` 虚拟环境，Node 的 `require('playwright')`
+通过 `NODE_PATH` 找到预装包；ESM 脚本可导入
+`/opt/dsh-tools/node_modules/playwright/index.mjs`，或在自己的项目中声明依赖。
+可用构建参数 `PLAYWRIGHT_VERSION`（默认 `latest`）固定 Playwright 版本。
+
+```bash
+docker exec -u node dsh python --version
+docker exec -u node dsh ffmpeg -version
+docker exec -u node dsh playwright --version
+docker exec -u node dsh chromium --version
+docker exec -u node dsh node /opt/dsh-setup/check-runtime-tools.mjs
+```
+
+最后一条检查实际视频编码、Node/Python 无头浏览器启动及截图；镜像构建时也会以
+运行 agent 的 `node` 用户、`HOME=/workspace` 执行这些检查。
 
 > 首次构建会下载 DSH 及其依赖（含 node-pty / koffi 等原生模块），需要几分钟；
 > 首次启动装插件（镜像内已预热 pnpm store，通常几秒）→ 打补丁 → 建号，

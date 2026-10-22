@@ -101,6 +101,8 @@ if [ ! -e "$PROFILE_DIR/node_modules/dsh-passwords" ] || ! grep -q "\"dsh-passwo
 fi
 
 # 4) 应用 dsh-passwords 的 DSH 补丁（版本门禁不符时这里就会失败）
+# profile 持久化目录中的插件是独立副本；每次安装/升级后也要应用登录补丁。
+DSH_PASSWORDS_PKG="$PROFILE_DIR/node_modules/dsh-passwords" node /opt/dsh-setup/patch-persistent-login.mjs
 if ! node "$PKG/dist/cli.js" patch; then
   echo "[dsh] FATAL: dsh-passwords patch failed; refusing to start." >&2
   exit 1

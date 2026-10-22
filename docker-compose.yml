@@ -40,6 +40,8 @@ services:
         REFRESH: ${DSH_REFRESH:-0}
         # pnpm 是构建/安装工具，不属于上面这些组件；默认也跟随最新
         PNPM_VERSION: ${PNPM_VERSION:-latest}
+        # Node/Python Playwright use the same version and matching Chromium.
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-latest}
     image: ${DSH_IMAGE:-dsh-local:latest}
     container_name: ${DSH_CONTAINER_NAME:-dsh}
     restart: unless-stopped
