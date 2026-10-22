@@ -293,9 +293,9 @@ DSH 的「模式」是 **agent preset**（一套工具与提示的组合）。we
 
 ---
 
-## 4. 版本与升级：默认自动跟随最新
+## 4. 版本与升级：默认自动跟随最新（DSH 跳过 rc 与不兼容版本）
 
-三个组件默认都**自动解析成当前最新且互相兼容的版本**，在**构建镜像时**（不是运行时）
+组件默认都**自动解析成当前最新且互相兼容的版本**，在**构建镜像时**（不是运行时）
 完成解析；结果会打印在构建日志里，也写在镜像内 `/opt/dsh-versions.json`：
 
 ```bash
@@ -304,7 +304,7 @@ docker exec dsh cat /opt/dsh-versions.json
 
 | 构建参数 | 默认 | 说明 |
 |---|---|---|
-| `DSH_VERSION` | `latest` | **不取 npm 的 `latest` 标签**——那个标签当前指向 `0.2.0-rc.2`，会被 dsh-passwords 拒绝启动。改为读取 dsh-passwords 自己声明的兼容范围（当前 `>=0.2.1-alpha.1 <0.2.2-0`），在其中取最新版本。插件升级门禁时这里会自动跟着走。 |
+| `DSH_VERSION` | `latest` | 在 dsh-passwords 自己声明的兼容范围（`>=0.2.1-alpha.1 <0.2.2-0`）内自动取最新，但会 **① 排除 `-rc` 预发布、② 只选 dsh-passwords 补丁锚点还能命中的版本**：rc/alpha 可能重构客户端 bundle，让网关按字符串锚点打的补丁失效（`0.2.1-alpha.3` 起就改了，`rc.1/rc.2` 也一样）。解析器会从 dsh-passwords 的 npm 包里读出锚点、只下载候选版本的 `dsh-client-ui-settings` 小包来验证，日志里会写跳过了谁。显式钉某个版本仍然照办，由构建期的补丁兼容门禁判断能不能用。 |
 | `DSH_PASSWORDS_VERSION` | `latest` | 网关插件，取它的 `latest` 标签 |
 | `SKIN_CENTER_VERSION` | `latest` | 皮肤管理中心，取它的 `latest` 标签 |
 | `DS_BOT_VERSION` | `latest` | ds-bot（只安装、默认不启用），取它的 `latest` 标签 |
@@ -319,13 +319,42 @@ $env:DSH_REFRESH = (Get-Date -UFormat %s); docker compose build; docker compose 
 DSH_REFRESH=$(date +%s) docker compose build && docker compose up -d
 ```
 
+**DSH 的 rc 排除 + 锚点探测 + 构建期门禁**：
+
+1. `docker/resolve-versions.mjs` 从 **dsh-passwords 的 npm tarball** 里读出它要替换的
+   客户端 bundle 字符串（锚点），再对兼容范围内由新到旧的候选版本，只下载其
+   `@deepseek-ai/dsh-client-ui-settings` 小包检查锚点是否还在，第一个命中的就是结果。
+   当前会跳过 `0.2.1-rc.2`、`0.2.1-rc.1`、`0.2.1-alpha.5/4/3`，落到 `0.2.1-alpha.2`：
+
+   ```
+   [resolve-versions] skipped: 0.2.1-rc.1 (rc prerelease), 0.2.1-rc.2 (rc prerelease),
+                     0.2.1-alpha.5 (patch anchor absent), 0.2.1-alpha.4 (patch anchor absent),
+                     0.2.1-alpha.3 (patch anchor absent)
+   [resolve-versions] @deepseek-ai/dsh 0.2.1-alpha.2 (newest patch-compatible in >=0.2.1-alpha.1 <0.2.2-0; rc excluded)
+   ```
+
+   等上游 dsh-passwords 跟进、锚点在更新的 alpha/正式版里恢复后，自动解析会自然跟着前进，
+   不需要再改这里。
+2. 即使换版本或显式钉某个 rc，`docker/check-patch-compat.mjs` 也会在构建期先应用
+   dsh-passwords 的补丁再复核状态；复核不过就直接让构建失败，而不是交付一个 3088
+   起不来的镜像。
+3. 兜底：万一读不到 dsh-passwords 的锚点（其打包结构变了），解析器退回“排除 rc 取最新”，
+   并打印警告，最终仍由构建期门禁把关。
+
+```bash
+# 想试某个 rc：显式钉，门禁会判断兼容性
+DSH_VERSION=0.2.1-rc.2 docker compose build
+# 确认要跳过门禁、自行承担风险时：
+DSH_VERSION=0.2.1-rc.2 docker compose build --build-arg DSH_SKIP_PATCH_GATE=1
+```
+
 已有的数据卷**不需要删**：镜像换了版本后，容器启动时会把 profile 里的插件对齐到
 镜像解析出的版本（对齐需要装包时会跑一次 `pnpm install`），皮肤与账号都不动。
 
 **钉死版本**（可复现构建）：在 `.env` 里取消注释对应行即可，例如
-`SKIN_CENTER_VERSION=0.4.4`。构建期还有两条硬校验：装完的版本必须与解析结果一致、
-node-pty 的 Linux 预编译必须存在（pnpm 版本漂移导致 `allowBuilds` 失效时会在这里
-直接失败，而不是悄悄装出一个残废镜像）。
+`SKIN_CENTER_VERSION=0.4.4`、`DSH_VERSION=0.2.1-alpha.2`。构建期还有两条硬校验：
+装完的版本必须与解析结果一致、node-pty 的 Linux 预编译必须存在（pnpm 版本漂移导致
+`allowBuilds` 失效时会在这里直接失败，而不是悄悄装出一个残废镜像）。
 
 > 运行期每次启动都会把 profile 的 `@linxin666/dsh-client-ui-skin-center` 依赖与 bundle
 > 条目对齐到镜像解析出的版本（与官方 `register-plugin.mjs` 对齐 dsh-passwords 的做法
@@ -448,6 +477,50 @@ exec dsh web           启动 DSH Web，网关由插件接管
 | 皮肤没生效 | 打开「设置 → 皮肤中心」看是否列出 whale-fantasy；确认 `docker exec dsh ls /data/dsh/skins` |
 | 想让 DSH 少看见外面 | 把 compose 的 ports 改成 `"127.0.0.1:3088:3088"`，只走 nginx |
 | 容器内改端口 | 不要改；`MCP_GATEWAY_PORT`/`DSH_WEB_PORT` 与 `MCP_GATEWAY_UPSTREAM` 是绑定的，改对外端口请改 `DSH_PORT` |
+| **右侧预览 Word/PPT 提示「Office 预览不可用」** | 镜像里没有可用字体：`docker compose build && docker compose up -d` 重建（2026-10-17 起镜像内置中文字体），详见 [7.1](#71-右侧预览-wordppt-打不开office-预览不可用) |
+| 构建失败：`[patch-compat-gate] this DSH build is NOT compatible ...` | 该 DSH 版本重构了 dsh-passwords 补丁依赖的客户端代码，网关会起不来。默认 `DSH_VERSION=latest` 已自动跳过 rc 与锚点失效的版本；若你显式钉了不兼容版本，去掉 `.env` 里的 `DSH_VERSION` 覆盖并重建（见第 4 节） |
+
+<a id="71-右侧预览-wordppt-打不开office-预览不可用"></a>
+### 7.1 右侧预览 Word/PPT 打不开（「Office 预览不可用」）
+
+**现象**：右侧边栏能打开 `.doc/.docx/.ppt/.pptx` 的标签页，但内容区显示
+「读取失败：Office 预览不可用。请在运行 DeepSeek Harness 的主机上启用文档预览服务。」
+（或者转换失败提示）；同一时间 `.pdf`、`.xlsx`、`.md`、图片都正常。
+
+**原因**：在 Linux 上 DSH 用 `libreoffice-kit` 的 **WASM** 引擎把 Office 转成 PDF 再预览。
+WASM 引擎只从磁盘上的字体目录（`/usr/share/fonts`、`~/.fonts`、`~/.local/share/fonts`）
+索引字体；`node:22.19.0-slim` 基础镜像里**一个字体都没有**，WASM 引擎于是直接拒绝：
+`ConversionError code=unavailable`、`No usable fonts were found`。
+Host 端的 `officeToPdf/render` 因此返回 `document-render/failed (reason: unavailable)`，
+前端只能显示「Office 预览不可用」。这不是插件没装、也不是端口/反代问题。
+
+**修复**：镜像在 `Dockerfile` 的「5b) 文档预览字体」层安装
+`fonts-noto-cjk`（中文）、`fonts-dejavu-core`、`fonts-liberation`、`fontconfig`。
+升级到带这一层的镜像即可：
+
+```bash
+docker compose build       # 首次会按钉定版本重装 DSH，之后只重跑字体层
+docker compose up -d       # 重建容器；/data 下的数据卷原样保留
+```
+
+验证（宿主机或容器内都行）：
+
+```bash
+# 1) 字体确实进镜像了（应有二十多个字体文件，约 90 MB）
+docker exec dsh sh -c "find /usr/share/fonts -type f | wc -l"
+
+# 2) 引擎能真正完成一次转换（把任意 docx 放进 /workspace 再跑）
+docker exec dsh node /opt/dsh/node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js \
+  convert --input /workspace/your.docx --output /tmp/out.pdf
+```
+
+> 自己定制镜像时，如果删掉字体层或换成 scratch/distroless 一类无字体基础镜像，
+> 这个功能会再次坏掉。只装 `fonts-dejavu-core` 能救拉丁文档，但中文会缺字，
+> 所以中文场景请保留 `fonts-noto-cjk`（约 90 MB 磁盘占用）。
+>
+> 另外：PDF 与 Excel（`.xlsx/.xls/.csv`）是**浏览器内**渲染（pdf.js / FortuneSheet），
+> 不经过上面的转换服务；它们打不开通常另有原因（文件超限、浏览器控制台报错），
+> 不属于本节的字体问题。
 
 ---
 
@@ -504,6 +577,11 @@ exec dsh web           启动 DSH Web，网关由插件接管
 | `docker/bootstrap-admin.mjs` 对 mock 网关（复刻真实 cookie/CSRF/表单契约） | `tests/bootstrap-admin.test.mjs` 22/22 |
 | `docker/seed-skins.mjs`（预置、默认官方外观、幂等、不覆盖用户选择） | `tests/seed-skins.test.mjs` 23/23 |
 | `tests/build-config.test.mjs`（compose 构建参数 ↔ Dockerfile `ARG`、COPY 源存在、entrypoint 引用的脚本已 COPY、compose 变量都有默认值、状态路径都有卷、只发布一个端口） | 56/56 |
+| **版本解析（默认 `DSH_VERSION=latest`）** | 解析到 `0.2.1-alpha.2`；日志列出跳过：`0.2.1-rc.1/rc.2 (rc prerelease)`、`0.2.1-alpha.5/alpha.4/alpha.3 (patch anchor absent)` |
+| **补丁兼容门禁**：默认 `latest`（解析到 `0.2.1-alpha.2`）构建 | 门禁通过（`settingsHostMode: true` + `connectionCookieBridge: patched`），容器网关正常启动 |
+| **补丁兼容门禁**：显式 `DSH_VERSION=0.2.1-rc.2` 构建 | 构建期 `[patch-compat-gate]` 判定不兼容并失败，提示换兼容版本；不会产出 3088 起不来的镜像 |
+| **右侧预览 Word/PPT**（`.docx` / `.pptx` → PDF） | 修前：`officeToPdf/render` → `document-render/failed (reason: unavailable)`，kit 报 `ConversionError: No usable fonts were found`；补字体后同一文件在右侧成功渲染（含中文），`missingFonts: []` |
+| **右侧预览 PDF / Excel**（`.pdf` / `.xlsx`） | 浏览器内渲染（pdf.js / FortuneSheet），无需转换服务；与字体层无关，实测正常 |
 
 测试都能在本地直接跑（`resolve-versions` 需要网络），部署冒烟那条对运行中的实例跑：
 
@@ -540,6 +618,19 @@ docker exec -u node -w /workspace dsh timeout 240 dsh --profile headless \
    进环境再引用同名变量”会被默认值 `latest` 静默顶掉，解析结果一律用 `RESOLVED_*`。
 3. **两次 pnpm install 是没必要的。** 两个插件在同一份 manifest 里一次装好，官方
    `register-plugin.mjs` 随后自然短路。
+4. **右侧预览 Word/PPT 提示「Office 预览不可用」。** 根因不是插件/端口，而是 Linux 上
+   Office→PDF 走 WASM 引擎、WASM 引擎要求磁盘上有字体，而 `node:*-slim` 基础镜像
+   一个字体都没有。已在 Dockerfile「5b) 文档预览字体」层装
+   `fonts-noto-cjk` + `fonts-dejavu-core` + `fonts-liberation` + `fontconfig`，
+   并在构建期断言 `/usr/share/fonts` 非空。详见 [7.1](#71-右侧预览-wordppt-打不开office-预览不可用)。
+5. **重建镜像后网关起不来（`settings host-mode patch is missing or unsupported`）。**
+   dsh-passwords 用字符串锚点打补丁并每次启动复核；DSH `0.2.1-rc.2` 重构了这段客户端
+   代码，锚点消失，网关 fail-closed。修复分两层：`docker/resolve-versions.mjs` 自动解析时
+   **排除 `-rc` 预发布，并且只选锚点仍能命中的版本**（锚点从 dsh-passwords 自己的 npm
+   包里读出，候选只下载 `dsh-client-ui-settings` 小包验证），所以默认的
+   `DSH_VERSION=latest` 会落到 `0.2.1-alpha.2` 而不是 rc；同时 Dockerfile 的
+   「4b) dsh-passwords 补丁兼容门禁」在构建期应用并复核补丁，显式钉了不兼容版本会直接
+   构建失败（见第 4 节）。
 
 ### 已知未覆盖的点
 

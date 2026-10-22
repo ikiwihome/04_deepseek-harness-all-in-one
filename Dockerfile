@@ -120,6 +120,23 @@ RUN set -a && . /opt/dsh-versions.env && set +a \
   && node -e "const v=require('/opt/dsh/node_modules/@deepseek-ai/dsh/package.json').version; const r=require('/opt/dsh-versions.json').dshRange; console.log('DSH '+v+' | dsh-passwords gate '+r);"
 
 # ---------------------------------------------------------------------------
+# 4b) dsh-passwords 补丁兼容门禁
+#     网关启动时会用字符串锚点给 DSH 客户端 bundle 打「settings 宿主模式」补丁，
+#     并复核结果；复核不过就 fail-closed 拒绝监听 3088。语义化版本范围挡不住上游重构：
+#     DSH 0.2.1-rc.2 把那段 settings 逻辑整个改写了，补丁打不上，镜像能构建成功、
+#     容器却起不来。这里在构建期应用并复核同一个补丁，不兼容直接构建失败，
+#     并提示改用已验证的 DSH 版本（例如 DSH_VERSION=0.2.1-alpha.2）。
+#     确认要跳过（自行承担网关起不来的风险）时用 --build-arg DSH_SKIP_PATCH_GATE=1。
+# ---------------------------------------------------------------------------
+COPY docker/check-patch-compat.mjs /opt/dsh-setup/check-patch-compat.mjs
+ARG DSH_SKIP_PATCH_GATE=0
+RUN if [ "$DSH_SKIP_PATCH_GATE" = "1" ]; then \
+      echo "[patch-compat-gate] skipped by DSH_SKIP_PATCH_GATE=1"; \
+    else \
+      node /opt/dsh-setup/check-patch-compat.mjs; \
+    fi
+
+# ---------------------------------------------------------------------------
 # 5) 本镜像自带的启动/初始化脚本、默认值 bundle、皮肤种子
 #    skins/whale-fantasy 与上游 https://github.com/zhu1090093659/dsh-skins
 #    的 dsh-skins/skins/whale-fantasy 一致（含 LICENSE，CC BY-NC-SA 4.0）。
@@ -141,6 +158,31 @@ RUN sed -i 's/\r$//' /usr/local/bin/dsh-entrypoint \
   && chmod 755 /usr/local/bin/dsh-entrypoint \
   && mkdir -p /data/dsh /data/dsh-passwords /workspace \
   && chown -R node:node /opt/dsh /opt/dsh-passwords /opt/dsh-setup /opt/dsh-defaults /opt/dsh-seed /data /workspace
+
+# ---------------------------------------------------------------------------
+# 5b) 文档预览字体（右侧预览 Word/PPT 的前提）
+#     Linux 上没有原生 LibreOffice 引擎包，Office 转 PDF 走 kit 的 WASM 引擎；
+#     它只直接从磁盘索引字体文件，一个可用字体都找不到就直接失败：
+#       ConversionError code=unavailable / "No usable fonts were found"
+#     表现为右侧打开 .doc/.docx/.ppt/.pptx 显示
+#     「Office 预览不可用。请在运行 DeepSeek Harness 的主机上启用文档预览服务。」
+#     node:*-slim 基础镜像里没有任何字体，所以必须显式安装：
+#       - fonts-noto-cjk               中文/日文/韩文文档正常排版（中文文档必需）
+#       - fonts-dejavu-core           拉丁文基础字体
+#       - fonts-liberation            Arial/Times/Courier 的度量兼容替代，
+#                                     减少「缺失字体」提示、贴近原版排版
+#       - fontconfig                  统一重建字体缓存，便于 fc-list 排查
+#     字体装在 apt 层；PDF 与 Excel 是浏览器内渲染，不依赖这里。
+# ---------------------------------------------------------------------------
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       fontconfig \
+       fonts-dejavu-core \
+       fonts-liberation \
+       fonts-noto-cjk \
+  && rm -rf /var/lib/apt/lists/* \
+  && test -n "$(find /usr/share/fonts -type f \( -name '*.ttf' -o -name '*.ttc' -o -name '*.otf' \) -print -quit)" \
+  && echo "office preview fonts installed: $(find /usr/share/fonts -type f | wc -l) font files"
 
 # ---------------------------------------------------------------------------
 # 6) 运行期环境
