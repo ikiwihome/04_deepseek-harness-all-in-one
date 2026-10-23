@@ -24,9 +24,8 @@ FROM node:22.19.0-slim
 # 版本参数（构建期）：默认全部 `latest` = 跟随 npm 最新，重建镜像即自动升级。
 #   DSH_VERSION / DSH_PASSWORDS_VERSION / SKIN_CENTER_VERSION
 #       传具体版本号即钉死（例如 SKIN_CENTER_VERSION=0.4.4）。
-#       DSH 不是取 npm 的 `latest` 标签——那个标签当前指向 0.2.0-rc.2，会被
-#       dsh-passwords 拒绝；而是用 dsh-passwords 自己声明的兼容范围
-#       （>=0.2.1-alpha.1 <0.2.2-0）解析出范围内最新的版本。
+#       DSH 优先使用 npm latest；皮肤根据其 peerDependencies 适配所选 DSH。
+#       不排除 RC，不再因网关旧补丁锚点回退 DSH。
 #   REFRESH
 #       解析这一步会被 Docker 层缓存；想强制重新解析时传任意新值
 #       （compose 里对应 DSH_REFRESH），例如 DSH_REFRESH=$(date +%s)。
@@ -120,14 +119,11 @@ RUN set -a && . /opt/dsh-versions.env && set +a \
   && node -e "const v=require('/opt/dsh/node_modules/@deepseek-ai/dsh/package.json').version; const r=require('/opt/dsh-versions.json').dshRange; console.log('DSH '+v+' | dsh-passwords gate '+r);"
 
 # ---------------------------------------------------------------------------
-# 4b) dsh-passwords 补丁兼容门禁
-#     网关启动时会用字符串锚点给 DSH 客户端 bundle 打「settings 宿主模式」补丁，
-#     并复核结果；复核不过就 fail-closed 拒绝监听 3088。语义化版本范围挡不住上游重构：
-#     DSH 0.2.1-rc.2 把那段 settings 逻辑整个改写了，补丁打不上，镜像能构建成功、
-#     容器却起不来。这里在构建期应用并复核同一个补丁，不兼容直接构建失败，
-#     并提示改用已验证的 DSH 版本（例如 DSH_VERSION=0.2.1-alpha.2）。
-#     确认要跳过（自行承担网关起不来的风险）时用 --build-arg DSH_SKIP_PATCH_GATE=1。
+# 4b) 网关兼容性：识别新版 DSH 原生 Host 设置接口，保留 Cookie 桥接检查。
+#     如果补丁/接口未知则构建失败，不静默回退 DSH。
 # ---------------------------------------------------------------------------
+COPY docker/patch-passwords-native-settings.mjs /opt/dsh-setup/patch-passwords-native-settings.mjs
+RUN node /opt/dsh-setup/patch-passwords-native-settings.mjs
 COPY docker/check-patch-compat.mjs /opt/dsh-setup/check-patch-compat.mjs
 ARG DSH_SKIP_PATCH_GATE=0
 RUN if [ "$DSH_SKIP_PATCH_GATE" = "1" ]; then \
@@ -232,6 +228,11 @@ ENV PATH=/opt/dsh-tools/node_modules/.bin:/opt/dsh-tools/venv/bin:/opt/dsh/node_
 
 # Test as the same non-root user and HOME used by agent shell commands.
 RUN su node -s /bin/sh -c 'HOME=/workspace node /opt/dsh-setup/check-runtime-tools.mjs'
+
+# Finalize the skin version against the selected DSH runtime before startup installs it.
+# Keep this after dependency installation so registry peer-range changes are cheap to repair.
+COPY docker/resolve-skin-version.mjs /opt/dsh-setup/resolve-skin-version.mjs
+RUN node /opt/dsh-setup/resolve-skin-version.mjs
 
 # ---------------------------------------------------------------------------
 # 默认登录密码（可选）：

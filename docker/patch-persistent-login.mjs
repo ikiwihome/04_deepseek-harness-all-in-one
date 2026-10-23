@@ -13,7 +13,7 @@ export function patchAuth(source) {
   return replaceOnce(source, '{ expiresIn: TOKEN_TTL }', '{ jwtid: randomUUID() }');
 }
 
-export function patchGateway(source) {
+function patchGatewaySession(source) {
   if (source.includes('// dsh-local: persistent-login')) return source;
   const start = source.indexOf('    const revokedTokens = new Map();');
   const end = source.indexOf('    function sessionOf(req)', start);
@@ -41,6 +41,15 @@ export function patchGateway(source) {
         next();
     });
     /** 统一 403 页面（封禁 / 权限拒绝） */`);
+}
+
+export function patchGateway(source) {
+  source = patchGatewaySession(source);
+  const marker = '// dsh-local: persistent-revocation-sweep';
+  if (source.includes(marker)) return source;
+  // Also repair images/profile packages that already have the first revision of this patch.
+  const obsolete = '        for (const [k, v] of revokedTokens)\n            if (v <= now)\n                revokedTokens.delete(k);';
+  return replaceOnce(source, obsolete, `        ${marker}\n        // Revocations are persistent database records; never expire them in the cache sweep.`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

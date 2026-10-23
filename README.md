@@ -4,9 +4,9 @@
 
 | 组件 | 版本 | 作用 |
 |---|---|---|
-| `@deepseek-ai/dsh` | `0.2.1-alpha.2` | DSH 本体（web profile） |
+| `@deepseek-ai/dsh` | `latest`（当前 `0.2.1-rc.2`） | DSH 本体（web profile） |
 | `dsh-passwords` | `2.7.8` | 密码登录网关：唯一对外入口，账号/权限/配额/审计 |
-| `@linxin666/dsh-client-ui-skin-center` | `0.4.4` | 皮肤管理中心（设置 → 皮肤中心） |
+| `@linxin666/dsh-client-ui-skin-center` | `latest`（当前 `0.4.8`） | 皮肤管理中心（设置 → 皮肤中心） |
 | `skins/whale-fantasy` | `1.0.0` | 鲸鱼娘·未至之境（视频背景皮肤），已预置并**默认启用** |
 
 对外只暴露 **3088** 一个端口，nginx 直接反代它即可。
@@ -64,8 +64,13 @@ docker exec dsh mkdir -p /tmp/dsh-validation/docker /tmp/dsh-validation/tests
 docker cp docker/patch-persistent-login.mjs dsh:/tmp/dsh-validation/docker/
 docker cp docker/patch-video-preview.mjs dsh:/tmp/dsh-validation/docker/
 docker cp docker/patch-download-preview.mjs dsh:/tmp/dsh-validation/docker/
+docker cp docker/resolve-skin-version.mjs dsh:/tmp/dsh-validation/docker/
+docker cp docker/resolve-versions.mjs dsh:/tmp/dsh-validation/docker/
+docker cp docker/patch-passwords-native-settings.mjs dsh:/tmp/dsh-validation/docker/
 docker cp tests/runtime-patches.test.mjs dsh:/tmp/dsh-validation/tests/
-docker exec dsh node --test /tmp/dsh-validation/tests/runtime-patches.test.mjs
+docker cp tests/skin-compat.test.mjs dsh:/tmp/dsh-validation/tests/
+docker cp tests/version-priority.test.mjs dsh:/tmp/dsh-validation/tests/
+docker exec dsh node --test /tmp/dsh-validation/tests/runtime-patches.test.mjs /tmp/dsh-validation/tests/skin-compat.test.mjs /tmp/dsh-validation/tests/version-priority.test.mjs
 ```
 
 开箱默认（详见第 3 节）：**官方原版外观 + 浅色主题**、
@@ -342,24 +347,23 @@ DSH 的「模式」是 **agent preset**（一套工具与提示的组合）。we
 
 ---
 
-## 4. 版本与升级：默认自动跟随最新（DSH 跳过 rc 与不兼容版本）
+## 4. 版本与升级：DSH 最新优先
 
-组件默认都**自动解析成当前最新且互相兼容的版本**，在**构建镜像时**（不是运行时）
-完成解析；结果会打印在构建日志里，也写在镜像内 `/opt/dsh-versions.json`：
-
-```bash
-docker exec dsh cat /opt/dsh-versions.json
-```
+默认首先解析 `@deepseek-ai/dsh@latest`，再选择与它兼容的最新皮肤插件。
+不再排除 RC，也不再为了插件或旧补丁自动降级 DSH。
+当前组合为 **DSH 0.2.1-rc.2 + 皮肤中心 0.4.8**。
 
 | 构建参数 | 默认 | 说明 |
 |---|---|---|
-| `DSH_VERSION` | `latest` | 在 dsh-passwords 自己声明的兼容范围（`>=0.2.1-alpha.1 <0.2.2-0`）内自动取最新，但会 **① 排除 `-rc` 预发布、② 只选 dsh-passwords 补丁锚点还能命中的版本**：rc/alpha 可能重构客户端 bundle，让网关按字符串锚点打的补丁失效（`0.2.1-alpha.3` 起就改了，`rc.1/rc.2` 也一样）。解析器会从 dsh-passwords 的 npm 包里读出锚点、只下载候选版本的 `dsh-client-ui-settings` 小包来验证，日志里会写跳过了谁。显式钉某个版本仍然照办，由构建期的补丁兼容门禁判断能不能用。 |
-| `DSH_PASSWORDS_VERSION` | `latest` | 网关插件，取它的 `latest` 标签 |
-| `SKIN_CENTER_VERSION` | `latest` | 皮肤管理中心，取它的 `latest` 标签 |
-| `DS_BOT_VERSION` | `latest` | ds-bot（只安装、默认不启用），取它的 `latest` 标签 |
-| `PNPM_VERSION` | `latest` | 构建/安装工具，不属于上面这些组件 |
+| `DSH_VERSION` | `latest` | 直接跟随 DSH 的 npm latest 标签，优先级最高。 |
+| `DSH_PASSWORDS_VERSION` | `latest` | 使用最新密码网关，并检查其对所选 DSH 的兼容性；不兼容时明确报错，不静默降级 DSH。 |
+| `SKIN_CENTER_VERSION` | `latest` | 使用支持所选 DSH 的最新皮肤版本；只有皮肤不兼容时才回退皮肤版本。显式指定不兼容版本会报错。 |
+| `DS_BOT_VERSION` | `latest` | 最新 ds-bot，只安装、默认不启用。 |
+| `PLAYWRIGHT_VERSION` | `latest` | Node/Python 使用同一版本与配套 Chromium。 |
+| `PNPM_VERSION` | `latest` | 构建与插件安装工具。 |
 
-**升级到最新**（版本解析结果会被 Docker 层缓存，所以要给一个会变的值）：
+版本在构建时解析，记录在 `/opt/dsh-versions.json`；重建镜像才会升级。
+强制重新查询 npm 时可更改 `DSH_REFRESH`：
 
 ```bash
 # PowerShell
@@ -368,47 +372,13 @@ $env:DSH_REFRESH = (Get-Date -UFormat %s); docker compose build; docker compose 
 DSH_REFRESH=$(date +%s) docker compose build && docker compose up -d
 ```
 
-**DSH 的 rc 排除 + 锚点探测 + 构建期门禁**：
+新版 DSH 的设置模块已经原生通过 Host 接口读取和修改设置，不再需要旧的
+host/memory 三元表达式补丁。本镜像会识别这种原生实现，继续检查网关 Cookie 桥接。
+识别失败或接口不兼容时构建会明确失败，保留正在运行的容器；不会以旧版本冒充 latest。
 
-1. `docker/resolve-versions.mjs` 从 **dsh-passwords 的 npm tarball** 里读出它要替换的
-   客户端 bundle 字符串（锚点），再对兼容范围内由新到旧的候选版本，只下载其
-   `@deepseek-ai/dsh-client-ui-settings` 小包检查锚点是否还在，第一个命中的就是结果。
-   当前会跳过 `0.2.1-rc.2`、`0.2.1-rc.1`、`0.2.1-alpha.5/4/3`，落到 `0.2.1-alpha.2`：
-
-   ```
-   [resolve-versions] skipped: 0.2.1-rc.1 (rc prerelease), 0.2.1-rc.2 (rc prerelease),
-                     0.2.1-alpha.5 (patch anchor absent), 0.2.1-alpha.4 (patch anchor absent),
-                     0.2.1-alpha.3 (patch anchor absent)
-   [resolve-versions] @deepseek-ai/dsh 0.2.1-alpha.2 (newest patch-compatible in >=0.2.1-alpha.1 <0.2.2-0; rc excluded)
-   ```
-
-   等上游 dsh-passwords 跟进、锚点在更新的 alpha/正式版里恢复后，自动解析会自然跟着前进，
-   不需要再改这里。
-2. 即使换版本或显式钉某个 rc，`docker/check-patch-compat.mjs` 也会在构建期先应用
-   dsh-passwords 的补丁再复核状态；复核不过就直接让构建失败，而不是交付一个 3088
-   起不来的镜像。
-3. 兜底：万一读不到 dsh-passwords 的锚点（其打包结构变了），解析器退回“排除 rc 取最新”，
-   并打印警告，最终仍由构建期门禁把关。
-
-```bash
-# 想试某个 rc：显式钉，门禁会判断兼容性
-DSH_VERSION=0.2.1-rc.2 docker compose build
-# 确认要跳过门禁、自行承担风险时：
-DSH_VERSION=0.2.1-rc.2 docker compose build --build-arg DSH_SKIP_PATCH_GATE=1
-```
-
-已有的数据卷**不需要删**：镜像换了版本后，容器启动时会把 profile 里的插件对齐到
-镜像解析出的版本（对齐需要装包时会跑一次 `pnpm install`），皮肤与账号都不动。
-
-**钉死版本**（可复现构建）：在 `.env` 里取消注释对应行即可，例如
-`SKIN_CENTER_VERSION=0.4.4`、`DSH_VERSION=0.2.1-alpha.2`。构建期还有两条硬校验：
-装完的版本必须与解析结果一致、node-pty 的 Linux 预编译必须存在（pnpm 版本漂移导致
-`allowBuilds` 失效时会在这里直接失败，而不是悄悄装出一个残废镜像）。
-
-> 运行期每次启动都会把 profile 的 `@linxin666/dsh-client-ui-skin-center` 依赖与 bundle
-> 条目对齐到镜像解析出的版本（与官方 `register-plugin.mjs` 对齐 dsh-passwords 的做法
-> 一致）。所以升级皮肤中心请重建镜像，而不是在界面里升级插件——后者会在下次重启时
-> 被改回镜像版本。
+已有账号、会话和皮肤数据保留。启动时 profile 中的插件会与镜像解析版本对齐。
+如需复现特定组合，可以显式指定具体版本，例如
+`DSH_VERSION=0.2.1-rc.2`、`SKIN_CENTER_VERSION=0.4.8`。
 
 ---
 
@@ -527,7 +497,7 @@ exec dsh web           启动 DSH Web，网关由插件接管
 | 想让 DSH 少看见外面 | 把 compose 的 ports 改成 `"127.0.0.1:3088:3088"`，只走 nginx |
 | 容器内改端口 | 不要改；`MCP_GATEWAY_PORT`/`DSH_WEB_PORT` 与 `MCP_GATEWAY_UPSTREAM` 是绑定的，改对外端口请改 `DSH_PORT` |
 | **右侧预览 Word/PPT 提示「Office 预览不可用」** | 镜像里没有可用字体：`docker compose build && docker compose up -d` 重建（2026-10-17 起镜像内置中文字体），详见 [7.1](#71-右侧预览-wordppt-打不开office-预览不可用) |
-| 构建失败：`[patch-compat-gate] this DSH build is NOT compatible ...` | 该 DSH 版本重构了 dsh-passwords 补丁依赖的客户端代码，网关会起不来。默认 `DSH_VERSION=latest` 已自动跳过 rc 与锚点失效的版本；若你显式钉了不兼容版本，去掉 `.env` 里的 `DSH_VERSION` 覆盖并重建（见第 4 节） |
+| 构建失败：`[patch-compat-gate] this DSH build is NOT compatible ...` | 该 DSH 版本重构了 dsh-passwords 补丁依赖的客户端代码，网关会起不来。默认优先保持 DSH 最新；已适配原生 Host 设置接口。出现未知接口时需更新网关适配，不自动降级 DSH（见第 4 节） |
 
 <a id="71-右侧预览-wordppt-打不开office-预览不可用"></a>
 ### 7.1 右侧预览 Word/PPT 打不开（「Office 预览不可用」）
@@ -589,7 +559,9 @@ docker exec dsh node /opt/dsh/node_modules/@deepseek-ai/libreoffice-kit/lib/cli.
 - **完全权限是刻意的**：`DSH_PERMISSION_MODE=danger-full-access` 让 agent 能在容器内执行任意命令，
   容器即信任边界——不要把宿主机敏感目录或 docker.sock 挂进去。
 - 版本号在写入构建环境文件前都经严格 semver 校验（无 shell 注入面）；钉的版本不存在时构建直接失败。
-## 9. 本仓库做过的验证
+## 9. 历史验证记录（旧版策略，仅供追溯）
+
+以下记录包含旧版 alpha.2 的测试结果与旧的 RC 排除策略；当前版本策略以第 4 节为准，最新回归命令见快速开始。
 
 开发机（Windows + Docker 29.8.2 / Compose v5.5.1，Linux 容器）上**实际构建、部署并跑过**：
 
@@ -672,14 +644,9 @@ docker exec -u node -w /workspace dsh timeout 240 dsh --profile headless \
    一个字体都没有。已在 Dockerfile「5b) 文档预览字体」层装
    `fonts-noto-cjk` + `fonts-dejavu-core` + `fonts-liberation` + `fontconfig`，
    并在构建期断言 `/usr/share/fonts` 非空。详见 [7.1](#71-右侧预览-wordppt-打不开office-预览不可用)。
-5. **重建镜像后网关起不来（`settings host-mode patch is missing or unsupported`）。**
-   dsh-passwords 用字符串锚点打补丁并每次启动复核；DSH `0.2.1-rc.2` 重构了这段客户端
-   代码，锚点消失，网关 fail-closed。修复分两层：`docker/resolve-versions.mjs` 自动解析时
-   **排除 `-rc` 预发布，并且只选锚点仍能命中的版本**（锚点从 dsh-passwords 自己的 npm
-   包里读出，候选只下载 `dsh-client-ui-settings` 小包验证），所以默认的
-   `DSH_VERSION=latest` 会落到 `0.2.1-alpha.2` 而不是 rc；同时 Dockerfile 的
-   「4b) dsh-passwords 补丁兼容门禁」在构建期应用并复核补丁，显式钉了不兼容版本会直接
-   构建失败（见第 4 节）。
+5. **新版 DSH 设置模块不再包含旧补丁锚点。** 已通过
+   `patch-passwords-native-settings.mjs` 识别原生 Host describe/mutate 实现，保留 Cookie
+   桥接门禁，不再依赖排除 RC 或降级到 alpha.2 来运行网关。
 
 ### 已知未覆盖的点
 

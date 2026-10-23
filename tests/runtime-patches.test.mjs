@@ -82,6 +82,35 @@ test('logout stays revoked across gateway restarts; password changes invalidate 
   assert.equal(runtime.sessionOf(request), null);
 });
 
+test('real ten-minute sweep runs repeatedly after persistent-login patch and repairs old patched images', () => {
+  const obsolete = '        for (const [k, v] of revokedTokens)\n            if (v <= now)\n                revokedTokens.delete(k);';
+  const repaired = '        // dsh-local: persistent-revocation-sweep\n        // Revocations are persistent database records; never expire them in the cache sweep.';
+  const oldPatch = gateway.replace(repaired, obsolete);
+  assert.notEqual(oldPatch, gateway);
+  assert.equal(patchGateway(oldPatch), gateway);
+  const start = gateway.indexOf('    const sweep = setInterval(() => {');
+  const end = gateway.indexOf('    sweep.unref();', start);
+  assert.ok(start >= 0 && end > start);
+  let callback, registeredDelay, pruned = 0, proxySweeps = 0;
+  const now = Date.now();
+  const sessionCache = new Map([['expired', { expireAt: now - 1 }], ['active', { expireAt: now + 3600000 }]]);
+  const maps = Object.fromEntries(['remoteEventOwnership', 'pendingCreatedSessions', 'usageThrottle', 'setupAttempts', 'loginSuccessRate', 'sessionCwdById', 'workspacePathById'].map(name => [name, new Map()]));
+  vm.runInNewContext(gateway.slice(start, end), {
+    ...maps, sessionCache, Date, console, SETUP_WINDOW_MS: 60000,
+    setInterval: (handler, delay) => { callback = handler; registeredDelay = delay; return {}; },
+    proxyRoutes: { sweep: () => proxySweeps++ }, adminRoutes: { usageReportThrottle: new Map() },
+    messageRoutes: { sweep() {} }, mediaRoutes: { sweepRate() {}, sweepMedia() {} },
+    db: { pruneStaleSecurityRows: () => pruned++ }
+  });
+  assert.equal(registeredDelay, 600000);
+  // Exercise the actual complete callback, not just the auth helper functions.
+  for (let tick = 0; tick < 12; tick++) assert.doesNotThrow(() => callback());
+  assert.equal(sessionCache.has('expired'), false);
+  assert.equal(sessionCache.has('active'), true);
+  assert.equal(pruned, 12);
+  assert.equal(proxySweeps, 12);
+});
+
 class FsError extends Error {}
 const serveFile = vm.runInNewContext(controller.slice(controller.indexOf('const BASE_HEADERS ='), controller.indexOf('/**\n* File-display contribution.')) + '\nserveFile', {
   Response, ReadableStream, Uint8Array, URL, FsError,
